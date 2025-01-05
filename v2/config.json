@@ -1,0 +1,20 @@
+{
+    "trading": {
+        "symbol": "BTCUSDT",
+        "interval": "5m",
+        "initial_balance": 10000,
+        "training_days": 60,
+        "leverage": 5
+    },
+    "model": {
+        "min_win_rate": 0.65,
+        "max_attempts": 20,
+        "retraining_interval": 24
+    },
+    "indicators": {
+        "sma_short": 20,
+        "sma_long": 50,
+        "rsi_period": 14,
+        "bb_period": 20
+    }
+}

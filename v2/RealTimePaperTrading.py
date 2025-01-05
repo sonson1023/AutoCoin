@@ -16,7 +16,7 @@ import websockets
 from dotenv import load_dotenv
 import os
 from sklearn import preprocessing
-
+from typing import Optional
 
 # .env 파일 로드
 load_dotenv()
@@ -30,15 +30,17 @@ class RealTimePaperTrading:
     def __init__(self, symbol, model, initial_balance=10000, interval='1h'):
         self.symbol = symbol.lower()  # Binance websocket requires lowercase
         self.interval = interval
-        self.model = model
+        self.model = model  # 외부에서 학습된 모델을 받아옴
         self.initial_balance = initial_balance
         self.current_balance = initial_balance
+
+        # Position tracking
         self.position = 0
         self.entry_price = 0
+
+        # Trading history
         self.trades = []
         self.equity_curve = []
-
-        # Historical data buffer for technical indicators
         self.price_buffer = deque(maxlen=100)
         self.current_price = None
 
@@ -50,12 +52,12 @@ class RealTimePaperTrading:
         # Binance client
         self.client = Client(api_key, api_secret)
 
-        # Initialize historical data
-        self._initialize_historical_data()
-
         # WebSocket connection
         self.ws = None
         self.running = False
+
+        # Initialize historical data
+        self._initialize_historical_data()
 
     def _initialize_historical_data(self):
         """Initialize price buffer with historical data"""
@@ -236,59 +238,44 @@ class RealTimePaperTrading:
 
 # def main():
 #     # Load your trained model
-#     model = xgb.XGBClassifier()
-#     model.load_model('trained_model.json')  # Load your pre-trained model
+#     try:
+#         model = xgb.XGBClassifier()
+#         # 먼저 기본 모델 생성
+#         model.fit(np.random.rand(10, 9), np.random.randint(2, size=10))
+#         # 그 다음 저장된 모델 파라미터 로드
+#         booster = xgb.Booster()
+#
+#         script_dir = os.path.dirname(os.path.abspath(__file__))
+#         model_filename = os.path.join(script_dir, f'trained_model_60_days.model')
+#         booster.load_model(model_filename)  # .json이 아닌 .model 확장자 사용
+#         model._Booster = booster
+#         model._le = preprocessing.LabelEncoder().fit([0, 1])  # 레이블 인코더 초기화
+#     except Exception as e:
+#         print(f"Error loading model: {e}")
+#         return
+#
+#     # Initialize paper trading system
 #
 #     # Initialize paper trading system
 #     trader = RealTimePaperTrading(
 #         symbol='BTCUSDT',
 #         model=model,
 #         initial_balance=10000,
-#         interval='1h'
+#         interval=interval
 #     )
 #
 #     try:
 #         trader.start_trading()
+#         # Let it run for a specified time or until keyboard interrupt
+#         while True:
+#             time.sleep(1)
 #     except KeyboardInterrupt:
+#         print("\nStopping trading bot...")
 #         trader.stop_trading()
-
-def main():
-    # Load your trained model
-    try:
-        model = xgb.XGBClassifier()
-        # 먼저 기본 모델 생성
-        model.fit(np.random.rand(10, 9), np.random.randint(2, size=10))
-        # 그 다음 저장된 모델 파라미터 로드
-        booster = xgb.Booster()
-        booster.load_model('trained_model.model')  # .json이 아닌 .model 확장자 사용
-        model._Booster = booster
-        model._le = preprocessing.LabelEncoder().fit([0, 1])  # 레이블 인코더 초기화
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return
-
-    # Initialize paper trading system
-
-    # Initialize paper trading system
-    trader = RealTimePaperTrading(
-        symbol='BTCUSDT',
-        model=model,
-        initial_balance=10000,
-        interval='5m'
-    )
-
-    try:
-        trader.start_trading()
-        # Let it run for a specified time or until keyboard interrupt
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nStopping trading bot...")
-        trader.stop_trading()
-    except Exception as e:
-        print(f"\nAn error occurred: {e}")
-        trader.stop_trading()
-
-
-if __name__ == "__main__":
-    main()
+#     except Exception as e:
+#         print(f"\nAn error occurred: {e}")
+#         trader.stop_trading()
+#
+#
+# if __name__ == "__main__":
+#     main()

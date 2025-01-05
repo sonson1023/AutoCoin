@@ -24,14 +24,28 @@ load_dotenv()
 api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_SECRET_KEY')
 
-# days 변수 정의
-training_days = 180
 
 class TradingModel:
-    def __init__(self, symbol, interval='1h', lookback_period=100):
+    def __init__(self, symbol, interval='1h', lookback_period=100, training_days=60):
         self.symbol = symbol
         self.interval = interval
         self.lookback_period = lookback_period
+        self.training_days = training_days
+        self.client = Client(api_key, api_secret)
+
+    def fetch_data(self):
+        """데이터 수집"""
+        start_time = (datetime.now() - timedelta(days=self.training_days)).strftime("%d %b %Y %H:%M:%S")
+        klines = self.client.get_historical_klines(self.symbol, Client.KLINE_INTERVAL_5MINUTE, start_time)
+
+        df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume',
+                                           'close_time', 'quote_asset_volume', 'number_of_trades',
+                                           'taker_buy_base', 'taker_buy_quote', 'ignore'])
+
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        df = df.astype(float)
+        return df
 
     def prepare_features(self, df):
         # 기술적 지표 계산
@@ -201,67 +215,104 @@ class TradingModel:
 
         fig.show()
 
+    def train_model_with_target_winrate(self, min_win_rate=0.65, max_attempts=20):
+        """목표 승률을 달성할 때까지 모델 재학습"""
+        print(f"\n목표 승률: {min_win_rate * 100}% | 최대 시도 횟수: {max_attempts}")
 
-def main():
-    # Binance API 설정
-    client = Client(api_key, api_secret)
+        best_win_rate = 0
+        best_model = None
+        best_results = None
 
-    # 데이터 수집
-    symbol = 'BTCUSDT'
-    # klines = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1HOUR, "1 year ago UTC")
+        for attempt in range(max_attempts):
+            print(f"\n시도 #{attempt + 1}")
 
-    start_time = (datetime.now() - timedelta(days=training_days)).strftime("%d %b %Y %H:%M:%S")
-    klines = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1HOUR, start_time)
+            # 데이터 준비
+            df = self.fetch_data()
+            X, y = self.prepare_data(df)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-    # DataFrame 생성
-    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume',
-                                       'close_time', 'quote_asset_volume', 'number_of_trades',
-                                       'taker_buy_base', 'taker_buy_quote', 'ignore'])
+            # 모델 파라미터 랜덤화
+            params = {
+                'max_depth': np.random.randint(3, 10),
+                'learning_rate': np.random.uniform(0.01, 0.3),
+                'n_estimators': np.random.randint(50, 200),
+                'min_child_weight': np.random.randint(1, 7),
+                'subsample': np.random.uniform(0.6, 1.0),
+                'colsample_bytree': np.random.uniform(0.6, 1.0),
+            }
 
-    # 데이터 전처리
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    df = df.astype(float)
+            # 모델 학습
+            model = xgb.XGBClassifier(**params)
+            model.fit(X_train, y_train)
 
-    # 모델 생성 및 학습
-    model = TradingModel(symbol)
-    X, y = model.prepare_data(df)
+            # 예측 및 백테스팅
+            predictions = model.predict(X_test)
+            results = self.backtest(X_test, y_test, predictions, df)
 
-    # 데이터 분할
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+            print(f"총 수익률: {results['total_return'] * 100:.2f}%")
+            print(f"샤프 비율: {results['sharpe_ratio']:.2f}")
+            print(f"거래 횟수: {results['num_trades']}")
+            print(f"승률: {results['win_rate'] * 100:.2f}%")
 
-    # XGBoost 모델 학습
-    xgb_model = xgb.XGBClassifier()
-    xgb_model.fit(X_train, y_train)
+            # 최고 성능 모델 저장
+            if results['win_rate'] > best_win_rate:
+                best_win_rate = results['win_rate']
+                best_model = model
+                best_results = results
 
-    # 모델 저장 시 days 정보를 파일명에 포함
-    model_filename = f'trained_model_{training_days}days.model'
-    xgb_model.save_model(model_filename)
+            # 목표 승률 달성 시 종료
+            if results['win_rate'] >= min_win_rate:
+                print(f"\n목표 승률 달성! ({results['win_rate'] * 100:.2f}% >= {min_win_rate * 100}%)")
+                self.save_model(model)
+                self.plot_backtest_results()
+                self.plot_feature_importance(model, X_train)
+                return model, results
 
-    # 예측 및 백테스팅
-    predictions = xgb_model.predict(X_test)
-    results = model.backtest(X_test, y_test, predictions, df)
+        print(f"\n목표 승률 미달성. 최고 성능 모델 사용 (승률: {best_win_rate * 100:.2f}%)")
+        if best_model is not None:
+            self.save_model(best_model)
+            self.plot_backtest_results()
+            self.plot_feature_importance(best_model, X_train)
+        return best_model, best_results
 
-    print("백테스팅 결과:")
-    print(f"총 수익률: {results['total_return'] * 100:.2f}%")
-    print(f"샤프 비율: {results['sharpe_ratio']:.2f}")
-    print(f"거래 횟수: {results['num_trades']}")
-    print(f"승률: {results['win_rate'] * 100:.2f}%")
+    def save_model(self, model):
+        """모델 저장"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        model_filename = os.path.join(script_dir, f'trained_model_{self.training_days}_days.model')
+        model.save_model(model_filename)
+        print(f"모델 저장 완료: {model_filename}")
 
-    # 결과 시각화
-    model.plot_backtest_results()
+    def plot_feature_importance(self, model, X_train):
+        """특성 중요도 시각화"""
+        plt.figure(figsize=(10, 6))
+        feature_importance = pd.DataFrame({
+            'feature': X_train.columns,
+            'importance': model.feature_importances_
+        }).sort_values('importance', ascending=False)
 
-    # 특성 중요도 시각화
-    plt.figure(figsize=(10, 6))
-    feature_importance = pd.DataFrame({
-        'feature': X_train.columns,
-        'importance': xgb_model.feature_importances_
-    }).sort_values('importance', ascending=False)
-
-    sns.barplot(x='importance', y='feature', data=feature_importance)
-    plt.title('Feature Importance')
-    plt.show()
+        sns.barplot(x='importance', y='feature', data=feature_importance)
+        plt.title('Feature Importance')
+        plt.show()
 
 
-if __name__ == "__main__":
-    main()
+# def main():
+#     model = TradingModel(
+#         symbol='BTCUSDT',
+#         interval='5m',
+#         training_days=60
+#     )
+#
+#     # 목표 승률 65%로 모델 학습
+#     best_model, results = model.train_model_with_target_winrate(
+#         min_win_rate=0.65,
+#         max_attempts=20
+#     )
+#
+#     if results['win_rate'] >= 0.65:
+#         print("\n트레이딩 시작 가능한 모델이 준비되었습니다.")
+#     else:
+#         print("\n목표 승률을 달성하지 못했습니다. 모델 파라미터를 조정하거나 다른 접근 방법을 시도해보세요.")
+#
+#
+# if __name__ == "__main__":
+#     main()
